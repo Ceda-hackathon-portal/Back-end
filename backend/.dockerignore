@@ -1,0 +1,11 @@
+node_modules
+dist
+.env*
+.runtime
+.npm-cache
+spikes
+src/generated
+.git
+**/.env*
+ops/staging/private
+**/*.key

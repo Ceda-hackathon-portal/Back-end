@@ -1,0 +1,99 @@
+name: Backend CI
+on:
+  pull_request:
+    branches: [develop, main]
+  push:
+    branches: [develop, 'feat/a-**', 'feat/b-**', 'chore/backend-consolidation']
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  container:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    defaults:
+      run:
+        working-directory: backend
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38
+        with:
+          node-version-file: backend/.node-version
+      - run: node tests/container-smoke.mjs
+  verify:
+    strategy:
+      matrix:
+        os: [ubuntu-24.04, windows-2025]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 15
+    defaults:
+      run:
+        working-directory: backend
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38
+        with:
+          node-version-file: backend/.node-version
+          cache: npm
+          cache-dependency-path: backend/package-lock.json
+      - run: npm ci
+      - run: npm run db:validate
+      - run: npm run typecheck
+      - run: npm test
+      - run: npm run test:smoke
+      - name: Eligibility policy tests when present in the reviewed tree
+        shell: bash
+        run: |
+          if git ls-files --error-unmatch tests/eligibilityPolicy.test.mjs >/dev/null 2>&1; then
+            node --test tests/eligibilityPolicy.test.mjs
+          fi
+      - run: git diff --exit-code
+
+  postgres:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    services:
+      postgres:
+        image: postgres:17
+        env:
+          POSTGRES_USER: fixture
+          POSTGRES_DB: ceda_test
+          POSTGRES_PASSWORD: ci-only
+          POSTGRES_HOST_AUTH_METHOD: scram-sha-256
+        ports: ['127.0.0.1:5432:5432']
+        options: --health-cmd pg_isready --health-interval 5s --health-timeout 5s --health-retries 10
+    defaults:
+      run:
+        working-directory: backend
+    env:
+      DATABASE_URL: postgresql://fixture:ci-only@127.0.0.1:5432/ceda_test
+      NODE_ENV: test
+      DATABASE_SSL: 'false'
+      DATABASE_STATEMENT_TIMEOUT_MS: '100'
+      DATABASE_LOCK_TIMEOUT_MS: '100'
+      DATABASE_QUERY_TIMEOUT_MS: '2000'
+      DATABASE_POOL_MAX: '2'
+      LOG_LEVEL: silent
+      DISPOSABLE_POSTGRES_SERVICE: 'true'
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38
+        with:
+          node-version-file: backend/.node-version
+          cache: npm
+          cache-dependency-path: backend/package-lock.json
+      - run: npm ci
+      - run: npm run build
+      - run: npm run db:migrate
+      - run: npm run db:migrate
+      - run: npx --no-install prisma migrate status
+      - name: Exercise the disposable database
+        run: |
+          mkdir -p .runtime
+          DISPOSABLE_DATABASE_RUN="$(cat /proc/sys/kernel/random/uuid)" node --test dist/tests/*.integration.test.js
