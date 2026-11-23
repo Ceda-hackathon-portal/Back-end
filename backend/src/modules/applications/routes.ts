@@ -9,6 +9,7 @@ import { ApplicationService, budgetDraftDto, draftFields } from './service.js';
 import { PrismaApplicationRepository } from './repository.js';
 import { PrismaEligibilityScreeningService } from '../eligibility/persistence.js';
 import { LocalPrivateDocumentStorage } from './document-storage.js';
+import { APPLICATION_PRIVACY_VERSION } from './privacy-consent.js';
 const uuid = z.string().uuid();
 const revision = z.number().int().nonnegative().max(2147483647);
 const expectedRevision = revision.max(2147483646);
@@ -30,7 +31,7 @@ function identifier(value: unknown): string {
     return parsed.data;
 }
 export function applicationRoutes(db: PrismaClient, sessions: SessionVerifier, requireCsrf: (request: Request) => void,
-    options: { screenOnSubmit?: boolean } = {}) {
+    options: { screenOnSubmit?: boolean; requirePrivacyConsent?: boolean } = {}) {
     const router = Router();
     const documentStorage = new LocalPrivateDocumentStorage();
     router.use(async (req, res, next) => {
@@ -121,6 +122,12 @@ export function applicationRoutes(db: PrismaClient, sessions: SessionVerifier, r
         res.json({ data: applicationDto.parse(result) });
     });
     router.post('/:id/submit', validateBody(z.strictObject({ expectedRevision })), async (req, res) => {
+        if (options.requirePrivacyConsent || process.env.NODE_ENV === 'production') {
+            const consent = await db.applicationPrivacyConsent.findUnique({
+                where: { userId_noticeVersion: { userId: (res.locals.principal as Principal).userId, noticeVersion: APPLICATION_PRIVACY_VERSION } },
+            });
+            if (!consent) throw new HttpError(422, 'PRIVACY_CONSENT_REQUIRED', 'Review the privacy notice before submitting.');
+        }
         const key = z.string().min(1).max(128).regex(/^[A-Za-z0-9_-]+$/).safeParse(req.headers['idempotency-key']);
         if (!key.success)
             throw new HttpError(422, 'VALIDATION_FAILED', 'A valid Idempotency-Key is required.');
