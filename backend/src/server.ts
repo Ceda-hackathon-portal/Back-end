@@ -12,6 +12,7 @@ import { CognitoProvider } from './modules/auth/provider.js';
 import { PrismaSessionStore } from './modules/auth/store.js';
 import { authRoutes } from './modules/auth/routes.js';
 import { applicationRoutes } from './modules/applications/routes.js';
+import { applicationPrivacyRoutes } from './modules/applications/privacy-consent.js';
 import { mountOfficerSubmissionRoutes } from './modules/applications/officer-routes.js';
 import { PrismaOfficerSubmissionReader } from './modules/applications/officer-submission-reader.js';
 import { PrismaOfficerReviewScope } from './modules/applications/prisma-officer-review-scope.js';
@@ -45,7 +46,8 @@ async function main() {
     logger.info({ enabled: Boolean(registration) }, 'applicant_registration');
     const auth = authRoutes(authentication, new PrismaSessionStore(prisma), provider, registration);
     apiRouter.use('/auth', auth.router);
-    apiRouter.use('/applications', applicationRoutes(prisma, auth.verifier, auth.requireCsrf, { screenOnSubmit: true }));
+    apiRouter.use('/service', applicationPrivacyRoutes(prisma, auth.verifier, auth.requireCsrf));
+    apiRouter.use('/applications', applicationRoutes(prisma, auth.verifier, auth.requireCsrf, { screenOnSubmit: true, requirePrivacyConsent: true }));
     // Before the evaluation and decision routers: the decision router authenticates everything that reaches it.
     mountStaffRoutes(apiRouter, prisma, assignmentPrisma, auth.verifier, auth.requireCsrf);
     mountOfficerSubmissionRoutes(apiRouter, config, auth.verifier,
