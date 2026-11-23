@@ -37,6 +37,17 @@ const schema = z.object({
   SESSION_IDLE_SECONDS: integer(1800, 60, 86400),
   SESSION_ABSOLUTE_SECONDS: integer(28800, 60, 604800),
   LOG_LEVEL: z.enum(['silent', 'fatal', 'error', 'warn', 'info', 'debug']).default('info'),
+  // Applicant email notifications. Off unless SMTP_HOST, SMTP_USER and SMTP_PASS are all set.
+  SMTP_HOST: z.string().min(1).optional(),
+  SMTP_PORT: integer(465, 1, 65535),
+  SMTP_USER: z.string().min(1).optional(),
+  SMTP_PASS: z.string().min(1).optional(),
+  MAIL_FROM: z.string().min(3).max(200).optional(),
+  // Demo only: deliver every notification to this inbox instead of the (fictional) account address.
+  MAIL_REDIRECT_TO: z.string().email().max(254).optional(),
+  // Where links in emails point (the frontend origin applicants use).
+  MAIL_LINK_ORIGIN: z.string().url().optional(),
+  EMAIL_POLL_MS: integer(15000, 1000, 300000),
 }).superRefine((value, context) => {
   if (value.NODE_ENV === 'production' && !value.DATABASE_SSL) context.addIssue({ code: 'custom', path: ['DATABASE_SSL'], message: 'TLS required in production' });
   if (value.NODE_ENV === 'production' && value.ALLOWED_ORIGINS.some(origin => !origin.startsWith('https://'))) context.addIssue({ code: 'custom', path: ['ALLOWED_ORIGINS'], message: 'HTTPS required' });

@@ -18,6 +18,7 @@ import { PrismaOfficerReviewScope } from './modules/applications/prisma-officer-
 import { mountEvaluationRoutes } from './infrastructure/evaluation-routes.js';
 import { mountDecisionRoutes } from './infrastructure/decision-routes.js';
 import { mountStaffRoutes } from './modules/staff/routes.js';
+import { EmailNotifier, emailConfig, smtpTransport } from './modules/notifications/email.js';
 
 async function main() {
   if (Number(process.versions.node.split('.')[0]) !== 24) throw new Error('Node.js 24 LTS is required.');
@@ -43,7 +44,11 @@ async function main() {
     mountEvaluationRoutes(apiRouter, prisma, auth.verifier, auth.requireCsrf);
     mountDecisionRoutes(apiRouter, prisma, auth.verifier, auth.requireCsrf);
   }
-  const resources = { check: () => database.check(), async close() { await prisma?.$disconnect(); await assignmentPrisma?.$disconnect(); await assignmentDatabase?.close(); await database.close(); } };
+  const mail = emailConfig(config);
+  const notifier = prisma && mail ? new EmailNotifier(prisma, smtpTransport(mail), mail, logger) : null;
+  notifier?.start();
+  logger.info({ enabled: Boolean(notifier) }, 'email_notifications');
+  const resources = { check: () => database.check(), async close() { notifier?.stop(); await prisma?.$disconnect(); await assignmentPrisma?.$disconnect(); await assignmentDatabase?.close(); await database.close(); } };
   let draining = false;
   const server = createServer(createApp(config, { database: resources, logger, isDraining: () => draining, apiRouter }));
   server.headersTimeout = 10000;
