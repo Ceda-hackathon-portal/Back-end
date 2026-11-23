@@ -53,3 +53,5 @@ $$;
 -- count attempts and mark a code used. It can never change a stored password hash.
 GRANT SELECT, INSERT ON applicant_credentials, registration_codes TO ceda_runtime;
 GRANT UPDATE(attempts, consumed_at) ON registration_codes TO ceda_runtime;
+-- Privacy declarations are immutable and use the authenticated account identity.
+GRANT SELECT, INSERT ON application_privacy_consents TO ceda_runtime;
