@@ -34,4 +34,4 @@ Build a container from this directory with docker build --target runtime -t ceda
 
 See [AWS staging preparation](docs/AWS_STAGING.md) for costs, authorization gates, restricted database roles, explicit migrations and rollback; see [implemented frontend API handoff](docs/FRONTEND_API_HANDOFF.md) for browser sessions, CSRF and applicant DTOs. No AWS infrastructure or shared database changes are authorized by this preparation.
 
-See [OpenAPI](docs/openapi.yaml), [browser authentication](docs/AUTH_CONTRACT.md) and the [joint schema and eligibility contract proposal](docs/DOMAIN_HANDOFF.md).
+See [staff workflow API](docs/STAFF_API.md), [OpenAPI](docs/openapi.yaml), [browser authentication](docs/AUTH_CONTRACT.md) and the [joint schema and eligibility contract proposal](docs/DOMAIN_HANDOFF.md).

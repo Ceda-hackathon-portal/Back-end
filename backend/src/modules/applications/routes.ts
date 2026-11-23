@@ -5,8 +5,9 @@ import type { PrismaClient } from '../../generated/prisma/client.js';
 import type { Principal, SessionVerifier } from '../../shared/authorization.js';
 import { HttpError } from '../../shared/errors.js';
 import { validateBody } from '../../shared/validation.js';
-import { ApplicationService, budgetDto, draftFields } from './service.js';
+import { ApplicationService, budgetDraftDto, draftFields } from './service.js';
 import { PrismaApplicationRepository } from './repository.js';
+import { PrismaEligibilityScreeningService } from '../eligibility/persistence.js';
 import { LocalPrivateDocumentStorage } from './document-storage.js';
 const uuid = z.string().uuid();
 const revision = z.number().int().nonnegative().max(2147483647);
@@ -14,12 +15,12 @@ const expectedRevision = revision.max(2147483646);
 const documentDto = z.strictObject({ id: uuid, category: z.string(), name: z.string(), contentType: z.string(), sizeBytes: z.number().int(), sha256: z.string().length(64), uploadedAt: z.date(), expiresAt: z.date().nullable() });
 const submissionDto = z.strictObject({
     id: uuid, applicationId: uuid, programmeVersionId: uuid, version: z.number().int().positive().optional(), reference: z.string().max(64),
-    revision, fields: draftFields, budget: budgetDto,
+    revision, fields: draftFields, budget: budgetDraftDto,
     documents: z.array(documentDto), submittedAt: z.date(),
 });
 const applicationDto = z.strictObject({
     id: uuid, ownerId: uuid, programmeId: uuid, programmeVersionId: uuid,
-    revision, stage: z.enum(['DRAFT', 'SUBMITTED']), fields: draftFields, budget: budgetDto,
+    revision, stage: z.enum(['DRAFT', 'SUBMITTED']), fields: draftFields, budget: budgetDraftDto,
     documents: z.array(documentDto), latestSubmission: submissionDto.nullable().optional(),
 });
 function identifier(value: unknown): string {
@@ -28,7 +29,8 @@ function identifier(value: unknown): string {
         throw new HttpError(422, 'VALIDATION_FAILED', 'A valid identifier is required.');
     return parsed.data;
 }
-export function applicationRoutes(db: PrismaClient, sessions: SessionVerifier, requireCsrf: (request: Request) => void) {
+export function applicationRoutes(db: PrismaClient, sessions: SessionVerifier, requireCsrf: (request: Request) => void,
+    options: { screenOnSubmit?: boolean } = {}) {
     const router = Router();
     const documentStorage = new LocalPrivateDocumentStorage();
     router.use(async (req, res, next) => {
@@ -113,7 +115,7 @@ export function applicationRoutes(db: PrismaClient, sessions: SessionVerifier, r
         const result = await command(principal, res.locals.requestId as string).read(principal, identifier(req.params.id));
         res.json({ data: applicationDto.parse(result) });
     });
-    router.patch('/:id', validateBody(z.strictObject({ expectedRevision, fields: draftFields, budget: budgetDto.optional() })), async (req, res) => {
+    router.patch('/:id', validateBody(z.strictObject({ expectedRevision, fields: draftFields, budget: budgetDraftDto.optional() })), async (req, res) => {
         const principal = res.locals.principal as Principal;
         const result = await command(principal, res.locals.requestId as string).update(principal, identifier(req.params.id), req.body.expectedRevision, req.body.fields, req.body.budget);
         res.json({ data: applicationDto.parse(result) });
@@ -124,6 +126,16 @@ export function applicationRoutes(db: PrismaClient, sessions: SessionVerifier, r
             throw new HttpError(422, 'VALIDATION_FAILED', 'A valid Idempotency-Key is required.');
         const principal = res.locals.principal as Principal;
         const result = await command(principal, res.locals.requestId as string).submit(principal, identifier(req.params.id), req.body.expectedRevision, key.data);
+        if (options.screenOnSubmit) {
+            // Screening reads the immutable submission and only records findings. An officer still decides.
+            const rule = await db.eligibilityRuleVersion.findFirst({
+                where: { programmeVersionId: result.programmeVersionId, publishedAt: { lte: new Date() } }, orderBy: { version: 'desc' },
+            });
+            // The fixed key makes a retried submit return the same screening record.
+            if (rule) await new PrismaEligibilityScreeningService(db).screen(principal, {
+                applicationId: result.applicationId, submissionVersionId: result.id, ruleVersionId: rule.id, idempotencyKey: `submitted_${result.id}`,
+            });
+        }
         res.json({ data: submissionDto.parse(result) });
     });
     router.get('/:id/submissions/:versionId', async (req, res) => {

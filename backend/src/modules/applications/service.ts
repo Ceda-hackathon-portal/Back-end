@@ -2,10 +2,18 @@ import { z } from 'zod';
 import { randomUUID } from 'node:crypto';
 import { HttpError } from '../../shared/errors.js';
 import type { Principal } from '../../shared/authorization.js';
+export const applicantProfile = z.strictObject({
+    fullName: z.string().max(200), email: z.string().max(254), phone: z.string().max(40),
+    companyName: z.string().max(200), registrationNumber: z.string().max(100),
+    registered: z.string().max(20), citizen: z.string().max(20),
+    shareholders: z.array(z.record(z.string().max(40), z.union([z.string().max(200), z.number().finite(), z.boolean()]))).max(30),
+});
 export const draftFields = z.strictObject({
     title: z.string().trim().max(120), theme: z.string().trim().max(100),
     problem: z.string().trim().max(3000), solution: z.string().trim().max(5000),
     impact: z.string().trim().max(3000), team: z.string().trim().max(150),
+    // Never part of the reviewer projection: see projectOfficerSubmissionFields.
+    applicant: applicantProfile.optional(),
     // Optional for backward compatibility. These are unverified applicant
     // inputs bound to the submission snapshot, never officer evidence.
     eligibilityEvidence: z.array(z.strictObject({
@@ -19,6 +27,12 @@ const budgetFields = z.strictObject({
   fundingRequested: z.string().regex(/^(|\d+(\.\d{1,2})?)$/),
   notApplicable: z.boolean(),
 });
+// A draft keeps half-typed rows so autosave never loses work. budgetDto is the rule for submission.
+export const budgetDraftDto = z.strictObject({
+  items: z.array(z.strictObject({ description: z.string().trim().max(200), amount: z.string().regex(/^(|\d+(\.\d{1,2})?)$/) })).max(100),
+  fundingRequested: budgetFields.shape.fundingRequested,
+  notApplicable: z.boolean(),
+});
 function cents(value: string): bigint { const [whole, fraction = ''] = value.split('.'); return BigInt(whole || '0') * 100n + BigInt((fraction + '00').slice(0, 2)); }
 export const budgetDto = budgetFields.superRefine((budget, context) => {
   if (budget.items.some(item => cents(item.amount) <= 0n)) context.addIssue({ code: 'custom', message: 'Budget amounts must be positive.' });
@@ -28,7 +42,7 @@ export const budgetDto = budgetFields.superRefine((budget, context) => {
 export function parseStoredBudget(value: unknown): Budget {
     if (typeof value === 'object' && value !== null && !Array.isArray(value) && Object.keys(value).length === 0)
         return { items: [], fundingRequested: '', notApplicable: false };
-    return budgetDto.parse(value);
+    return budgetDraftDto.parse(value);
 }
 export type Budget = z.infer<typeof budgetDto>;
 export type DraftFields = z.infer<typeof draftFields>;
@@ -143,7 +157,7 @@ export class ApplicationService {
         idSchema.parse(id);
         revisionSchema.parse(expectedRevision);
         const fields = draftFields.parse(input);
-        const budget = budgetDto.parse(budgetInput ?? { items: [], fundingRequested: '', notApplicable: false });
+        const budget = budgetDraftDto.parse(budgetInput ?? { items: [], fundingRequested: '', notApplicable: false });
         return this.repository.transaction(async (tx) => {
             await tx.requireSession(principal);
             const application = owned(await tx.application(id), principal);
@@ -178,7 +192,7 @@ export class ApplicationService {
             const { budget, documents } = await tx.requirements(id, principal.userId);
             if (!documents.some(document => document.category === 'technical-proposal'))
                 throw new HttpError(422, 'DOCUMENT_REQUIRED', 'Attach the required technical proposal before submitting.');
-            if (!budget.notApplicable && (budget.items.length === 0 || budget.items.some(item => Number(item.amount) <= 0)))
+            if (!budget.notApplicable && (budget.items.length === 0 || !budgetDto.safeParse(budget).success))
                 throw new HttpError(422, 'BUDGET_REQUIRED', 'Complete the budget details or mark funding figures as not applicable.');
             const submission: Submission = { id: randomUUID(), applicationId: id, programmeVersionId: programme.id,
                 reference: 'CEDA-' + randomUUID(), revision: application.revision + 1, fields, budget, documents,
