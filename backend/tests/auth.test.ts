@@ -32,6 +32,23 @@ test('local auth is development-only, loopback-only and requires explicit local 
   assert.equal(verifyLocalPassword('development-only credential with sufficient length', passwordHash), true);
   assert.equal(verifyLocalPassword('wrong credential with sufficient length', passwordHash), false);
 });
+test('public demo local auth is opt-in, production-only, same-origin HTTPS and uses secure cookies', () => {
+  const passwordHash = localPasswordHash('development-only credential with sufficient length');
+  const origin = 'https://ceda-demo.example.test';
+  const demo = { NODE_ENV: 'production', HOST: '0.0.0.0', AUTH_MODE: 'local', AUTH_LOCAL_PUBLIC_DEMO: 'true', AUTH_API_ORIGIN: origin, AUTH_FRONTEND_ORIGIN: origin, ALLOWED_ORIGINS: origin, AUTH_ENCRYPTION_KEY: key, AUTH_LOCAL_EMAIL: 'local@example.test', AUTH_LOCAL_PASSWORD_HASH: passwordHash };
+  const config = authConfig(demo, 1800, 28800);
+  assert.equal(config?.mode, 'local');
+  assert.equal(config?.secure, true);
+  // Without the explicit switch, production and non-loopback hosts stay refused.
+  assert.throws(() => authConfig({ ...demo, AUTH_LOCAL_PUBLIC_DEMO: undefined }, 1800, 28800));
+  assert.throws(() => authConfig({ ...demo, AUTH_LOCAL_PUBLIC_DEMO: 'yes' }, 1800, 28800));
+  // The switch never relaxes HTTPS, production mode, exact allowed origins or same-origin.
+  assert.throws(() => authConfig({ ...demo, NODE_ENV: 'development' }, 1800, 28800));
+  assert.throws(() => authConfig({ ...demo, AUTH_API_ORIGIN: 'http://ceda-demo.example.test', AUTH_FRONTEND_ORIGIN: 'http://ceda-demo.example.test', ALLOWED_ORIGINS: 'http://ceda-demo.example.test' }, 1800, 28800));
+  assert.throws(() => authConfig({ ...demo, AUTH_API_ORIGIN: 'https://api.example.test' }, 1800, 28800));
+  assert.throws(() => authConfig({ ...demo, ALLOWED_ORIGINS: 'https://other.example.test' }, 1800, 28800));
+  assert.throws(() => authConfig({ ...demo, AUTH_ENABLED: 'true' }, 1800, 28800));
+});
 test('local login reuses CSRF, opaque session and logout with no role or grant elevation', async () => {
   const password = 'development-only credential with sufficient length'; const email = 'local@example.test';
   const local = authConfig({ NODE_ENV: 'development', HOST: '127.0.0.1', AUTH_MODE: 'local', AUTH_API_ORIGIN: 'http://localhost:3001', AUTH_FRONTEND_ORIGIN: 'http://localhost:5173', ALLOWED_ORIGINS: 'http://localhost:5173', AUTH_ENCRYPTION_KEY: key, AUTH_LOCAL_EMAIL: email, AUTH_LOCAL_PASSWORD_HASH: localPasswordHash(password) }, 1800, 28800)!;

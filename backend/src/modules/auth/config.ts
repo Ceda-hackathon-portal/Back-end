@@ -28,7 +28,11 @@ function localAccounts(path: string | undefined): LocalAccount[] {
 export function authConfig(env: NodeJS.ProcessEnv, idleSeconds: number, absoluteSeconds: number): AuthConfig | null {
   const mode = env.AUTH_MODE;
   if (mode === 'local') {
-    if (env.NODE_ENV !== 'development' || !isLoopbackHost(env.HOST ?? '127.0.0.1') || (env.AUTH_ENABLED !== undefined && env.AUTH_ENABLED !== 'false')) throw new Error('Invalid authentication configuration');
+    // Public demo: fictional local accounts over HTTPS for the hackathon prototype. Opt-in only, never the default.
+    // It still needs NODE_ENV=production (so DATABASE_SSL and HTTPS origins are enforced), and uses Secure __Host- cookies.
+    const publicDemo = env.AUTH_LOCAL_PUBLIC_DEMO === 'true';
+    if (env.AUTH_ENABLED !== undefined && env.AUTH_ENABLED !== 'false') throw new Error('Invalid authentication configuration');
+    if (publicDemo ? env.NODE_ENV !== 'production' : (env.NODE_ENV !== 'development' || !isLoopbackHost(env.HOST ?? '127.0.0.1'))) throw new Error('Invalid authentication configuration');
     const result = z.object({
       AUTH_API_ORIGIN: z.string().url(), AUTH_FRONTEND_ORIGIN: z.string().url(), AUTH_ENCRYPTION_KEY: z.string().regex(/^[a-fA-F0-9]{64}$/),
       AUTH_LOCAL_EMAIL: z.string().email().max(254), AUTH_LOCAL_NAME: z.string().min(1).max(100).default('Local Developer'),
@@ -38,10 +42,13 @@ export function authConfig(env: NodeJS.ProcessEnv, idleSeconds: number, absolute
     const v = result.data;
     const apiUrl = new URL(v.AUTH_API_ORIGIN); const frontendUrl = new URL(v.AUTH_FRONTEND_ORIGIN);
     const allowedOrigins = (env.ALLOWED_ORIGINS ?? '').split(',').map(origin => origin.trim());
-    if (apiUrl.origin !== v.AUTH_API_ORIGIN || frontendUrl.origin !== v.AUTH_FRONTEND_ORIGIN || apiUrl.protocol !== 'http:' || frontendUrl.protocol !== 'http:' || !isLoopbackHost(apiUrl.hostname) || !isLoopbackHost(frontendUrl.hostname) ||
-      apiUrl.hostname !== frontendUrl.hostname || !allowedOrigins.includes(v.AUTH_FRONTEND_ORIGIN)) throw new Error('Invalid authentication origins');
+    const exact = apiUrl.origin === v.AUTH_API_ORIGIN && frontendUrl.origin === v.AUTH_FRONTEND_ORIGIN && allowedOrigins.includes(v.AUTH_FRONTEND_ORIGIN);
+    const loopbackHttp = apiUrl.protocol === 'http:' && frontendUrl.protocol === 'http:' && isLoopbackHost(apiUrl.hostname) && isLoopbackHost(frontendUrl.hostname) && apiUrl.hostname === frontendUrl.hostname;
+    // In the public demo the browser reaches the API through the frontend host's /api proxy, so both origins are the same HTTPS origin.
+    const sameHttps = apiUrl.protocol === 'https:' && v.AUTH_API_ORIGIN === v.AUTH_FRONTEND_ORIGIN;
+    if (!exact || !(publicDemo ? sameHttps : loopbackHttp)) throw new Error('Invalid authentication origins');
     return { mode, accounts: localAccounts(env.AUTH_LOCAL_ACCOUNTS_FILE), email: v.AUTH_LOCAL_EMAIL.toLowerCase(), name: v.AUTH_LOCAL_NAME, passwordHash: v.AUTH_LOCAL_PASSWORD_HASH,
-      apiOrigin: v.AUTH_API_ORIGIN, frontendOrigin: v.AUTH_FRONTEND_ORIGIN, key: v.AUTH_ENCRYPTION_KEY, secure: false, idleSeconds, absoluteSeconds };
+      apiOrigin: v.AUTH_API_ORIGIN, frontendOrigin: v.AUTH_FRONTEND_ORIGIN, key: v.AUTH_ENCRYPTION_KEY, secure: publicDemo, idleSeconds, absoluteSeconds };
   }
   if (mode !== undefined && mode !== 'cognito') throw new Error('Invalid authentication configuration');
   if (env.AUTH_ENABLED === undefined || env.AUTH_ENABLED === 'false') return null;
