@@ -11,6 +11,7 @@ test('email stays off unless host, user and password are all set', () => {
   const on = emailConfig(loadConfig({ ...base, SMTP_HOST: 'smtp.gmail.com', SMTP_USER: 'a@example.test', SMTP_PASS: 'x' }));
   assert.equal(on?.SMTP_PORT, 465);
   assert.throws(() => loadConfig({ ...base, MAIL_REDIRECT_TO: 'not-an-email' }));
+  assert.throws(() => loadConfig({ ...base, NODE_ENV: 'production', DATABASE_SSL: 'true', SMTP_TLS: 'none' }));
 });
 
 test('submission email carries the reference and a link, never idea content, and escapes HTML', () => {
@@ -37,7 +38,7 @@ function fakeDb(jobs: Array<{ id: string; attempts: number; claimed?: boolean }>
   return { db, updates };
 }
 const logger = { info() {}, warn() {}, error() {} };
-const config = { SMTP_HOST: 'h', SMTP_USER: 'u', SMTP_PASS: 'p', SMTP_PORT: 465, EMAIL_POLL_MS: 15000, MAIL_REDIRECT_TO: 'team@example.test' };
+const config = { SMTP_TLS: 'required', SMTP_HOST: 'h', SMTP_USER: 'u', SMTP_PASS: 'p', SMTP_PORT: 465, EMAIL_POLL_MS: 15000, MAIL_REDIRECT_TO: 'team@example.test' };
 
 test('notifier sends claimed jobs once, redirects in demo mode, and backs off on failure', async () => {
   const { db, updates } = fakeDb([{ id: 'a', attempts: 0 }, { id: 'b', attempts: 0, claimed: false }, { id: 'c', attempts: 2 }]);

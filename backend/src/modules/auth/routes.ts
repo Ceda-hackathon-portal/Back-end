@@ -8,13 +8,14 @@ import type { IdentityProvider } from './provider.js';
 import type { SessionStore } from './store.js';
 import { token, hash, csrf, validCsrf, seal, unseal, verifyLocalPassword } from './crypto.js';
 import { validateBody } from '../../shared/validation.js';
+import { completeRegistration, saveCredential, startRegistration, verifyRegisteredApplicant, type RegistrationDeps } from './registration.js';
 
 function cookie(header: string | undefined, name: string) {
   const found = (header ?? '').split(';').map(part => part.trim()).filter(part => part.startsWith(name + '='));
   if (found.length !== 1) return null;
   const value = found[0]!.slice(name.length + 1); return /^[A-Za-z0-9_-]{43}$/.test(value) ? value : null;
 }
-export function authRoutes(config: AuthConfig, store: SessionStore, provider?: IdentityProvider) {
+export function authRoutes(config: AuthConfig, store: SessionStore, provider?: IdentityProvider, registration?: RegistrationDeps) {
   const router = Router(); const prefix = config.secure ? '__Host-' : 'dev_';
   const names = { session: prefix + 'ceda_session', csrf: prefix + 'ceda_csrf', attempt: prefix + 'ceda_oidc' };
   const options = { httpOnly: true, secure: config.secure, sameSite: 'lax' as const, path: '/' };
@@ -27,11 +28,16 @@ export function authRoutes(config: AuthConfig, store: SessionStore, provider?: I
   // Bounded per-process safety limiter; not a distributed service or permission cache.
   const attempts = new Map<string, { count: number; until: number }>();
   router.use((req, _res, next) => {
-    if (!['/login', '/local-login', '/callback'].includes(req.path)) { next(); return; }
+    if (!['/login', '/local-login', '/callback', '/register', '/register/verify'].includes(req.path)) { next(); return; }
     const now = Date.now(); for (const [key, row] of attempts) if (row.until < now) attempts.delete(key);
     const key = req.ip ?? 'unknown'; const row = attempts.get(key) ?? { count: 0, until: now + 60000 };
     if ((attempts.size >= 10000 && !attempts.has(key)) || ++row.count > 20) throw new HttpError(429, 'RATE_LIMITED', 'Try again later.');
     attempts.set(key, row); next();
+  });
+  // Which sign-in methods this deployment offers, so the frontend shows only what works.
+  router.get('/providers', (_req, res) => {
+    res.json({ data: { password: config.mode === 'local', cognito: config.mode === 'cognito' && Boolean(provider), google: false,
+      registration: config.mode === 'local' && Boolean(registration) } });
   });
   router.get('/csrf', (req, res) => {
     let raw = sessionToken(req) ?? cookie(req.headers.cookie, names.csrf);
@@ -80,14 +86,35 @@ export function authRoutes(config: AuthConfig, store: SessionStore, provider?: I
       const passwordValid = verifyLocalPassword(String(req.body.password), account.passwordHash);
       const emailBytes = Buffer.from(email); const expectedEmailBytes = Buffer.from(account.email);
       const emailValid = emailBytes.length === expectedEmailBytes.length && timingSafeEqual(emailBytes, expectedEmailBytes);
-      if (!passwordValid || !emailValid) throw new HttpError(401, 'LOGIN_FAILED', 'Sign-in could not be verified.');
-      const identity = { issuer: 'urn:ceda:local-development', subject: account.email, email: account.email, name: account.name };
-      const raw = token(); const previous = sessionToken(req);
-      await store.create(identity, hash(raw), previous ? hash(previous) : null, config.idleSeconds, config.absoluteSeconds);
-      res.cookie(names.session, raw, { ...options, maxAge: config.absoluteSeconds * 1000 });
-      res.clearCookie(names.csrf, options);
+      const identity = passwordValid && emailValid
+        ? { issuer: 'urn:ceda:local-development', subject: account.email, email: account.email, name: account.name }
+        : registration && !emailValid ? await verifyRegisteredApplicant(registration.db, email, String(req.body.password)) : null;
+      if (!identity) throw new HttpError(401, 'LOGIN_FAILED', 'Sign-in could not be verified.');
+      await startSession(req, res, identity);
       res.json({ data: { authenticated: true } });
     });
+    if (registration) {
+      // Applicant self-registration. Accounts created here are applicants only: no grant, so no staff access.
+      router.post('/register', validateBody(z.strictObject({
+        name: z.string().trim().min(2).max(100), email: z.string().trim().email().max(254), password: z.string().min(12).max(128),
+      })), async (req, res) => {
+        requireCsrf(req);
+        res.status(202).json({ data: await startRegistration(registration, req.body) });
+      });
+      router.post('/register/verify', validateBody(z.strictObject({ verificationId: z.string().uuid(), code: z.string().regex(/^\d{6}$/) })), async (req, res) => {
+        requireCsrf(req);
+        const { identity, passwordHash } = await completeRegistration(registration, req.body);
+        await startSession(req, res, identity);
+        await saveCredential(registration.db, identity.email, passwordHash);
+        res.status(201).json({ data: { authenticated: true } });
+      });
+    }
+  }
+  async function startSession(req: Request, res: import('express').Response, identity: { issuer: string; subject: string; email: string; name: string }) {
+    const raw = token(); const previous = sessionToken(req);
+    await store.create(identity, hash(raw), previous ? hash(previous) : null, config.idleSeconds, config.absoluteSeconds);
+    res.cookie(names.session, raw, { ...options, maxAge: config.absoluteSeconds * 1000 });
+    res.clearCookie(names.csrf, options);
   }
   router.get('/session', async (req, res) => {
     const raw = sessionToken(req); const session = raw ? await store.find(hash(raw), config.idleSeconds) : null;

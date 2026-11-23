@@ -13,7 +13,7 @@ export interface MailTransport { send(mail: Mail): Promise<void> }
 type Logger = ReturnType<typeof createLogger>;
 
 export type EmailConfig = { SMTP_HOST: string; SMTP_USER: string; SMTP_PASS: string } &
-  Pick<Config, 'SMTP_PORT' | 'MAIL_FROM' | 'MAIL_REDIRECT_TO' | 'MAIL_LINK_ORIGIN' | 'EMAIL_POLL_MS'>;
+  Pick<Config, 'SMTP_PORT' | 'MAIL_FROM' | 'MAIL_REDIRECT_TO' | 'MAIL_LINK_ORIGIN' | 'EMAIL_POLL_MS' | 'SMTP_TLS'>;
 
 /** Email is enabled only when the three SMTP settings are present. */
 export function emailConfig(config: Config): EmailConfig | null {
@@ -23,7 +23,8 @@ export function emailConfig(config: Config): EmailConfig | null {
 
 export function smtpTransport(config: EmailConfig): MailTransport {
   const transporter = nodemailer.createTransport({
-    host: config.SMTP_HOST, port: config.SMTP_PORT, secure: config.SMTP_PORT === 465, requireTLS: config.SMTP_PORT !== 465,
+    host: config.SMTP_HOST, port: config.SMTP_PORT, secure: config.SMTP_TLS === 'required' && config.SMTP_PORT === 465,
+    requireTLS: config.SMTP_TLS === 'required' && config.SMTP_PORT !== 465, ignoreTLS: config.SMTP_TLS === 'none',
     auth: { user: config.SMTP_USER, pass: config.SMTP_PASS.replace(/\s+/g, '') },
   });
   const from = config.MAIL_FROM ?? `CEDA Innovation Portal <${config.SMTP_USER}>`;
@@ -53,6 +54,11 @@ export function submissionReceivedEmail(input: { name: string; reference: string
     + (link ? `<p><a href="${escapeHtml(link)}">Track your application</a></p>` : '')
     + '<p style="color:#666;font-size:12px">CEDA Innovation Portal. This is an automated message. Do not reply with personal or business information.</p>';
   return { subject: `CEDA application received: ${input.reference}`, text: lines.join('\n'), html };
+}
+
+/** Demo accounts use fictional @example.test addresses, so their mail goes to the team inbox; real addresses get their own. */
+export function recipientFor(email: string, redirect?: string) {
+  return redirect && email.toLowerCase().endsWith('@example.test') ? redirect : email;
 }
 
 /** Wait before the next attempt: 1, 2, 4 ... minutes, capped at one hour. */
@@ -87,7 +93,7 @@ export class EmailNotifier {
         try {
           if (!reference) throw new Error('submission reference missing');
           const message = submissionReceivedEmail({ name: job.recipient.name, reference, linkOrigin: this.config.MAIL_LINK_ORIGIN });
-          await this.transport.send({ to: this.config.MAIL_REDIRECT_TO ?? job.recipient.email, ...message });
+          await this.transport.send({ to: recipientFor(job.recipient.email, this.config.MAIL_REDIRECT_TO), ...message });
           await this.db.outboxEvent.update({ where: { id: job.id }, data: { deliveredAt: new Date() } });
           sent += 1;
           this.logger.info({ outboxId: job.id }, 'email_sent');

@@ -7,6 +7,12 @@ export function localPasswordHash(password: string, salt = randomBytes(16)) {
   const derived = scryptSync(password, salt, 64, { N: 32768, r: 8, p: 1, maxmem: 64 * 1024 * 1024 });
   return `scrypt$32768$8$1$${salt.toString('base64url')}$${derived.toString('base64url')}`;
 }
+/** Same scrypt format and cost as localPasswordHash; applicants choose their own password (12-128 characters). */
+export function applicantPasswordHash(password: string, salt = randomBytes(16)) {
+  if (password.length < 12 || password.length > 128) throw new Error('Applicant password must be 12-128 characters');
+  const derived = scryptSync(password, salt, 64, { N: 32768, r: 8, p: 1, maxmem: 64 * 1024 * 1024 });
+  return `scrypt$32768$8$1$${salt.toString('base64url')}$${derived.toString('base64url')}`;
+}
 export function verifyLocalPassword(password: string, encoded: string) {
   const match = /^scrypt\$32768\$8\$1\$([A-Za-z0-9_-]{22})\$([A-Za-z0-9_-]{86})$/.exec(encoded);
   if (!match || password.length > 1024) return false;

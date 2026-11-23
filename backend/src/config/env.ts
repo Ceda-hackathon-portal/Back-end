@@ -48,7 +48,10 @@ const schema = z.object({
   // Where links in emails point (the frontend origin applicants use).
   MAIL_LINK_ORIGIN: z.string().url().optional(),
   EMAIL_POLL_MS: integer(15000, 1000, 300000),
+  // 'none' is for a local mail catcher (for example Mailpit) and is refused in production.
+  SMTP_TLS: z.enum(['required', 'none']).default('required'),
 }).superRefine((value, context) => {
+  if (value.NODE_ENV === 'production' && value.SMTP_TLS === 'none') context.addIssue({ code: 'custom', path: ['SMTP_TLS'], message: 'TLS required in production' });
   if (value.NODE_ENV === 'production' && !value.DATABASE_SSL) context.addIssue({ code: 'custom', path: ['DATABASE_SSL'], message: 'TLS required in production' });
   if (value.NODE_ENV === 'production' && value.ALLOWED_ORIGINS.some(origin => !origin.startsWith('https://'))) context.addIssue({ code: 'custom', path: ['ALLOWED_ORIGINS'], message: 'HTTPS required' });
   if (value.SESSION_IDLE_SECONDS > value.SESSION_ABSOLUTE_SECONDS) context.addIssue({ code: 'custom', path: ['SESSION_IDLE_SECONDS'], message: 'Idle must not exceed absolute lifetime' });

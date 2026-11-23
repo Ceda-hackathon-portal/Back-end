@@ -32,9 +32,18 @@ async function main() {
     ? createDatabase({ ...config, DATABASE_URL: config.ASSIGNMENT_DATABASE_URL }, () => logger.error({ code: 'ASSIGNMENT_DATABASE_IDLE_ERROR' }, 'database_error'))
     : null;
   const assignmentPrisma = assignmentDatabase ? new PrismaClient({ adapter: new PrismaPg(assignmentDatabase.pool, { disposeExternalPool: false }) }) : null;
+  const mail = emailConfig(config);
   if (authentication && prisma) {
     const provider = authentication.mode === 'cognito' ? new CognitoProvider(authentication) : undefined;
-    const auth = authRoutes(authentication, new PrismaSessionStore(prisma), provider);
+    // Applicant self-registration needs local accounts and a working mail server (the code is sent by email).
+    const reserved = authentication.mode === 'local'
+      ? new Set([authentication.email, ...(authentication.accounts ?? []).map(account => account.email)]) : new Set<string>();
+    const registration = authentication.mode === 'local' && mail ? {
+      db: prisma, mailer: smtpTransport(mail), key: authentication.key, linkOrigin: mail.MAIL_LINK_ORIGIN,
+      isReservedEmail: (email: string) => reserved.has(email),
+    } : undefined;
+    logger.info({ enabled: Boolean(registration) }, 'applicant_registration');
+    const auth = authRoutes(authentication, new PrismaSessionStore(prisma), provider, registration);
     apiRouter.use('/auth', auth.router);
     apiRouter.use('/applications', applicationRoutes(prisma, auth.verifier, auth.requireCsrf, { screenOnSubmit: true }));
     // Before the evaluation and decision routers: the decision router authenticates everything that reaches it.
@@ -44,7 +53,6 @@ async function main() {
     mountEvaluationRoutes(apiRouter, prisma, auth.verifier, auth.requireCsrf);
     mountDecisionRoutes(apiRouter, prisma, auth.verifier, auth.requireCsrf);
   }
-  const mail = emailConfig(config);
   const notifier = prisma && mail ? new EmailNotifier(prisma, smtpTransport(mail), mail, logger) : null;
   notifier?.start();
   logger.info({ enabled: Boolean(notifier) }, 'email_notifications');

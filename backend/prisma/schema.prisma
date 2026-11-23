@@ -21,6 +21,7 @@ model AuthUser {
   outboxEvents    OutboxEvent[]
   identities      AuthIdentity[]
   sessions        AuthSession[]
+  applicantCredential ApplicantCredential?
   eligibilityChecks EligibilityCheck[]
   eligibilityReviews OfficerReview[]
   officerAssignments OfficerAssignment[]
@@ -678,4 +679,30 @@ model EligibilityOutbox {
   deliveredAt DateTime? @map("delivered_at") @db.Timestamptz(3)
   audit EligibilityAudit @relation(fields: [checkId], references: [checkId], onDelete: Restrict, onUpdate: Restrict)
   @@map("eligibility_outbox")
+}
+
+/// Password for an applicant who registered themselves (verified by email). Staff never register.
+model ApplicantCredential {
+  userId       String   @id @map("user_id") @db.Uuid
+  passwordHash String   @map("password_hash") @db.VarChar(200)
+  createdAt    DateTime @default(now()) @map("created_at") @db.Timestamptz(3)
+  user         AuthUser @relation(fields: [userId], references: [id], onDelete: Restrict, onUpdate: Restrict)
+
+  @@map("applicant_credentials")
+}
+
+/// A pending self-registration. The 6-digit code is stored only as a keyed hash and is single-use.
+model RegistrationCode {
+  id           String    @id @db.Uuid
+  email        String    @db.VarChar(254)
+  name         String    @db.VarChar(100)
+  passwordHash String    @map("password_hash") @db.VarChar(200)
+  codeHash     String    @map("code_hash") @db.Char(64)
+  attempts     Int       @default(0)
+  expiresAt    DateTime  @map("expires_at") @db.Timestamptz(3)
+  consumedAt   DateTime? @map("consumed_at") @db.Timestamptz(3)
+  createdAt    DateTime  @default(now()) @map("created_at") @db.Timestamptz(3)
+
+  @@index([email, createdAt])
+  @@map("registration_codes")
 }
