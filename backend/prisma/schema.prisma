@@ -22,6 +22,7 @@ model AuthUser {
   identities      AuthIdentity[]
   sessions        AuthSession[]
   applicantCredential ApplicantCredential?
+  applicationPrivacyConsents ApplicationPrivacyConsent[]
   eligibilityChecks EligibilityCheck[]
   eligibilityReviews OfficerReview[]
   officerAssignments OfficerAssignment[]
@@ -50,6 +51,17 @@ model AuthIdentity {
 
   @@unique([issuer, subject])
   @@map("identities")
+}
+
+model ApplicationPrivacyConsent {
+  userId        String   @map("user_id") @db.Uuid
+  noticeVersion String   @map("notice_version") @db.VarChar(32)
+  acceptedAt    DateTime @default(now()) @map("accepted_at") @db.Timestamptz(3)
+  requestId     String   @map("request_id") @db.Uuid
+  user          AuthUser @relation(fields: [userId], references: [id], onDelete: Restrict, onUpdate: Restrict)
+
+  @@id([userId, noticeVersion])
+  @@map("application_privacy_consents")
 }
 
 model AuthSession {
